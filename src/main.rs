@@ -53,12 +53,16 @@ const ROOM_MIN_SIZE: i32 = 6;
 const MAX_ROOMS: i32 = 30;
 
 const MAX_ROOM_MONSTERS: i32 = 3;
-const MAX_ROOM_ITEMS: i32 = 2;
+const MAX_ROOM_ITEMS: i32 = 10;
 
 const PLAYER: usize = 0;
 const INVENTORY_WIDTH: i32 = 50;
 
 const HEAL_AMOUNT: i32 = 4;
+const LIGHTNING_DAMAGE: i32 = 40;
+const LIGHTNING_RANGE: i32 = 6; 
+const CONFUSE_RANGE: i32 = 8;
+const CONFUSE_NUM_TURNS: i32 = 10;
 
 struct Tcod {
     root: Root,
@@ -202,9 +206,21 @@ fn move_towards(id: usize, target_x: i32, target_y: i32, map: &Map, objects: &mu
 }
 
 fn ai_take_turn(monster_id: usize, tcod: &Tcod, game: &mut Game, objects: &mut [Object]) {
+    if let Some(ai) = objects[monster_id].ai.take() {
+        let new_ai = match ai {
+            Ai::Basic => ai_basic(monster_id, tcod, game, objects),
+            Ai::Confused {
+                previous_ai, 
+                num_turns,
+            } => ai_confused(monster_id, tcod, game, objects, previous_ai, num_turns),
+        };
+        objects[monster_id].ai = Some(new_ai);
+    }
+
+}
+
+fn ai_basic(monster_id: usize, tcod: &Tcod, game: &mut Game, objects: &mut [Object]) -> Ai {
     let (monster_x, monster_y) = objects[monster_id].pos();
-    // check if the monster can see us
-    
     if tcod.fov.is_in_fov(monster_x, monster_y) {
         if objects[monster_id].distance_to(&objects[PLAYER]) >= 2.0 {
             let (player_x, player_y) = objects[PLAYER].pos();
@@ -213,6 +229,36 @@ fn ai_take_turn(monster_id: usize, tcod: &Tcod, game: &mut Game, objects: &mut [
             let (monster, player) = mut_two(monster_id, PLAYER, objects);
             monster.attack(player, game);
         }
+    }
+    Ai::Basic
+}
+
+fn ai_confused(
+    monster_id: usize, 
+    _tcod: &Tcod, 
+    game: &mut Game, 
+    objects: &mut [Object],
+    previous_ai: Box<Ai>,
+    num_turns: i32,
+    ) -> Ai {
+    if num_turns >= 0 {
+        move_by(
+            monster_id,
+            rand::thread_rng().gen_range(-1, 2),
+            rand::thread_rng().gen_range(-1, 2),
+            &game.map, 
+            objects,
+            );
+        Ai::Confused {
+            previous_ai: previous_ai,
+            num_turns: num_turns - 1,
+        }
+    } else {
+        game.messages.add(
+            format!("The {} is no longer confused", objects[monster_id].name),
+            RED,
+            );
+        *previous_ai
     }
 }
 
@@ -261,15 +307,28 @@ fn place_objects(room: Rect, map: &Map, objects: &mut Vec<Object>) {
         }
 
    }
-   //placing objects
+   //placing item 
    let num_items = rand::thread_rng().gen_range(0, MAX_ROOM_ITEMS + 1);
    for _ in 0..num_items {
        let x = rand::thread_rng().gen_range(room.x1 + 1, room.x2);
        let y = rand::thread_rng().gen_range(room.y1 + 1, room.y2);
        if !is_blocked(x, y, map, objects) {
-           let mut object = Object::new(x, y, 'b', VIOLET, "healing potion",  false);
-           object.item = Some(Item::Heal);
-           objects.push(object);
+           let dice = rand::random::<f32>();
+           let item = if dice < 0.70 {
+               let mut object = Object::new(x, y, 'b', VIOLET, "healing potion",  false); 
+               object.item = Some(Item::Heal);
+               object
+           } else if dice < 0.7 + 0.1 {
+               let mut object = Object::new(x, y, '#', LIGHT_YELLOW, "Scroll of lightning bolt",  false);
+               object.item = Some(Item::Lightning);
+               object
+           } else {
+               let mut object = Object::new(x, y, '#', LIGHT_BLUE, "Scroll of confusion", false);
+               object.item = Some(Item::Confuse);
+               object
+           };
+           
+           objects.push(item);
        }
    }
 }
@@ -516,6 +575,8 @@ fn use_item(inventory_id: usize, tcod: &mut Tcod, game: &mut Game, objects: &mut
     if let Some(item) = game.inventory[inventory_id].item {
         let on_use = match item {
             object::Item::Heal => cast_heal,
+            object::Item::Lightning => cast_lightning,
+            object::Item::Confuse => cast_confuse,
         };
         match on_use(inventory_id, tcod, game, objects) {
             UseResult::UsedUp => {
@@ -550,6 +611,73 @@ fn cast_heal(
     UseResult::Cancelled
 }
 
+fn cast_lightning(
+    _inventory_id: usize,
+    tcod: &mut Tcod,
+    game: &mut Game,
+    objects: &mut [Object],
+) -> UseResult {
+    let monster_id = closest_monster(tcod, objects, LIGHTNING_RANGE);
+    if let Some(monster_id) = monster_id {
+        game.messages.add(
+            format!(
+                "A lightning bolt strike {} with a loud thunder! the damage is {} hit points",
+                objects[monster_id].name, LIGHTNING_DAMAGE
+            ),
+             LIGHT_BLUE
+        );
+        objects[monster_id].take_damage(LIGHTNING_DAMAGE, game);
+        UseResult::UsedUp
+    } else {
+        game.messages.add("No Enemy close enough", ORANGE);
+        UseResult::Cancelled
+    }    
+}
+
+fn cast_confuse(
+    _inventory_id: usize,
+    tcod: &mut Tcod,
+    game: &mut Game,
+    objects: &mut [Object],
+    ) -> UseResult {
+    //let monster_id = target_monster(CONFUSE_RANGE, objects, tcod);
+    let monster_id = closest_monster(tcod, objects, CONFUSE_RANGE);
+    if let Some(monster_id) = monster_id {
+        let old_ai = objects[monster_id].ai.take().unwrap_or(Ai::Basic);
+        objects[monster_id].ai = Some(Ai::Confused {
+            previous_ai: Box::new(old_ai),
+            num_turns: CONFUSE_NUM_TURNS,
+        });
+        game.messages.add(
+            format!(
+                "{} seems confused, as he starts to stumble around",
+                objects[monster_id].name
+                ),
+                LIGHT_GREEN,
+            );
+        UseResult::UsedUp
+    } else {
+        game.messages.add("No enemy in range", ORANGE);
+        UseResult::Cancelled
+    }
+}
+
+
+fn closest_monster(tcod: &Tcod, objects: &[Object], max_range: i32) -> Option<usize> {
+    let mut closest_enemy = None;
+    let mut closest_dist = (max_range + 1) as f32;
+    for (id, object) in objects.iter().enumerate() {
+        if (id != PLAYER) && object.fighter.is_some() && object.ai.is_some() && tcod.fov.is_in_fov(object.x, object.y) {
+            let dist = objects[PLAYER].distance_to(object);
+            if dist < closest_dist {
+                closest_enemy = Some(id);
+                closest_dist = dist
+            }
+        }
+    }
+    closest_enemy
+}
+
 // ===================== MAIN
 fn main() {
     tcod::system::set_fps(FPS_LIMIT);
@@ -578,8 +706,8 @@ fn main() {
     player.fighter = Some(Fighter {
         max_hp: 30,
         hp: 30,
-        defense: 2,
-        power: 5,
+        defense: 20,
+        power: 50,
         on_death: DeathCallBack::Player,
     });
 

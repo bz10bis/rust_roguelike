@@ -20,6 +20,8 @@ pub struct Object {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Item {
     Heal,
+    Lightning,
+    Confuse,
 }
 
 pub enum UseResult {
@@ -121,9 +123,13 @@ pub struct Fighter {
 }
 
 // define AI type for monster
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Ai {
     Basic,
+    Confused {
+        previous_ai: Box<Ai>,
+        num_turns: i32,
+    },
 }
 
 
