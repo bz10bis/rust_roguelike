@@ -53,7 +53,7 @@ const ROOM_MIN_SIZE: i32 = 6;
 const MAX_ROOMS: i32 = 30;
 
 const MAX_ROOM_MONSTERS: i32 = 3;
-const MAX_ROOM_ITEMS: i32 = 10;
+const MAX_ROOM_ITEMS: i32 = 2;
 
 const PLAYER: usize = 0;
 const INVENTORY_WIDTH: i32 = 50;
@@ -174,11 +174,22 @@ fn handle_keys(tcod: &mut Tcod, game: &mut Game, objects: &mut Vec<Object>) -> P
         (Key { code: Text, ..}, "i", true) => {
             let inventory_index = inventory_menu(
                 &game.inventory, 
-                "Press the key next to item to use it or any other th cancel\n",
+                "Press the key next to item to use it or any other to cancel\n",
                 &mut tcod.root
                 );
             if let Some(inventory_index) = inventory_index {
                 use_item(inventory_index, tcod, game, objects);
+            }
+            DidntTakeTurn
+        }
+        (Key { code: Text, ..}, "d", true) => {
+            let inventory_index = inventory_menu(
+                &game.inventory,
+                "Presss the key next to item to drop it, or other key to cancel\n",
+                &mut tcod.root,
+                );
+            if let Some(inventory_index) = inventory_index {
+                drop_item(inventory_index, game, objects);
             }
             DidntTakeTurn
         }
@@ -593,6 +604,13 @@ fn use_item(inventory_id: usize, tcod: &mut Tcod, game: &mut Game, objects: &mut
     }
 }
 
+fn drop_item(inventory_id: usize, game: &mut Game, objects: &mut Vec<Object>) {
+     let mut item = game.inventory.remove(inventory_id);
+     item.set_pos(objects[PLAYER].x, objects[PLAYER].y);
+     game.messages.add(format!("You dropped a {}", item.name), YELLOW);
+     objects.push(item);
+}
+
 fn cast_heal(
     _inventory_id: usize, 
     _tcod: &mut Tcod, 
@@ -706,8 +724,8 @@ fn main() {
     player.fighter = Some(Fighter {
         max_hp: 30,
         hp: 30,
-        defense: 20,
-        power: 50,
+        defense: 2,
+        power: 5,
         on_death: DeathCallBack::Player,
     });
 
