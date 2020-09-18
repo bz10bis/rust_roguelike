@@ -1,9 +1,10 @@
 // Object.rs
 use tcod::colors::*;
 use tcod::console::*;
+use serde::{Deserialize, Serialize};
 use crate::game::Game;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Object {
     pub x: i32,
     pub y: i32,
@@ -17,7 +18,7 @@ pub struct Object {
     pub item: Option<Item>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Item {
     Heal,
     Lightning,
@@ -113,7 +114,7 @@ impl Object {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Fighter {
     pub max_hp: i32,
     pub hp: i32,
@@ -123,7 +124,7 @@ pub struct Fighter {
 }
 
 // define AI type for monster
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Ai {
     Basic,
     Confused {
@@ -133,7 +134,7 @@ pub enum Ai {
 }
 
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum DeathCallBack {
     Player, 
     Monster,

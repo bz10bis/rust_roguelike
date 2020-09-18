@@ -1,6 +1,8 @@
 use crate::object::Object;
+use serde::{Deserialize, Serialize};
 //game.rs
 
+#[derive(Serialize, Deserialize)]
 pub struct Game {
     pub map: Map,
     pub messages: Messages,
@@ -44,7 +46,7 @@ impl Rect {
 
 
 // ===================== TILE
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct Tile {
     pub blocked: bool,
     pub block_sight: bool,
@@ -65,6 +67,7 @@ impl Tile {
 //
 use tcod::colors::*;
 
+#[derive(Serialize, Deserialize)]
 pub struct Messages {
     pub messages: Vec<(String, Color)>,
 

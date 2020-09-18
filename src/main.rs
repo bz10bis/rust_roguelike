@@ -1,4 +1,7 @@
 use std::cmp;
+use std::fs::File;
+use std::io::{Read, Write};
+use std::error::Error;
 use rand::Rng;
 
 use tcod::colors::*;
@@ -6,6 +9,8 @@ use tcod::console::*;
 use tcod::input::{self, Event, Key, Mouse};
 use tcod::input::KeyCode::*;
 use tcod::map::{FovAlgorithm, Map as FovMap};
+
+use serde::{Deserialize, Serialize};
 
 mod object;
 use object::*;
@@ -56,6 +61,10 @@ const MAX_ROOM_MONSTERS: i32 = 3;
 const MAX_ROOM_ITEMS: i32 = 2;
 
 const PLAYER: usize = 0;
+const PLAYER_BASE_MAX_HP: i32 = 30;
+const PLAYER_BASE_DEFENSE: i32 = 2;
+const PLAYER_BASE_POWER: i32 = 5;
+
 const INVENTORY_WIDTH: i32 = 50;
 
 const HEAL_AMOUNT: i32 = 4;
@@ -431,6 +440,10 @@ fn render_bar(
 
 
 fn render_all(tcod: &mut Tcod, game: &mut Game, objects: &[Object], fov_recompute: bool) {
+    if fov_recompute {
+        let player = &objects[PLAYER];
+        tcod.fov.compute_fov(player.x, player.y, TORCH_RADIUS, FOV_LIGHT_WALLS, FOV_ALGO);
+    }
     // Draw all objects from the list
     let mut to_draw: Vec<_> = objects
         .iter().filter(|o| tcod.fov.is_in_fov(o.x, o.y))
@@ -456,18 +469,13 @@ fn render_all(tcod: &mut Tcod, game: &mut Game, objects: &[Object], fov_recomput
                 if visible {
                     *explored = true;
                 }
-                if *explored || DEBUG {
+                if *explored {
                     tcod.con.set_char_background(x, y, color, BackgroundFlag::Set);
                 }
         }
     }
     
     blit(&tcod.con, (0, 0), (MAP_WIDTH, MAP_HEIGHT), &mut tcod.root, (0,0), 1.0, 1.0,);
-
-    if fov_recompute {
-        let player = &objects[PLAYER];
-        tcod.fov.compute_fov(player.x, player.y, TORCH_RADIUS, FOV_LIGHT_WALLS, FOV_ALGO);
-    }
 
     //player stats
    tcod.panel.set_default_background(BLACK);
@@ -696,6 +704,142 @@ fn closest_monster(tcod: &Tcod, objects: &[Object], max_range: i32) -> Option<us
     closest_enemy
 }
 
+fn new_game(tcod: &mut Tcod) -> (Game, Vec<Object>) {
+    // Initialize player
+    let mut player = Object::new(0, 0, '@', WHITE, "player", true);
+    player.alive = true;
+    player.fighter = Some(Fighter {
+        max_hp: PLAYER_BASE_MAX_HP,
+        hp: PLAYER_BASE_MAX_HP,
+        defense: PLAYER_BASE_DEFENSE,
+        power: PLAYER_BASE_POWER,
+        on_death: DeathCallBack::Player,
+    });
+    // Add player to object list 
+    let mut objects = vec![player];
+
+    let mut game = Game {
+        map: make_map(&mut objects),
+        messages: Messages::new(),
+        inventory: vec![],
+    };
+    initialize_fov(tcod, &game.map);
+
+    game.messages.add(
+        "Welcome Stranger ! Prepare to perish in the Maze of the Blue Medusa",
+        RED,
+        );
+    (game, objects)
+}
+
+fn initialize_fov(tcod: &mut Tcod, map: &Map) {
+    for y in 0..MAP_HEIGHT {
+        for x in 0..MAP_WIDTH {
+            tcod.fov.set(
+                x, 
+                y, 
+                !map[x as usize][y as usize].block_sight,
+                !map[x as usize][y as usize].blocked,
+                );
+        }
+    }
+    tcod.con.clear();
+}
+
+fn play_game(tcod: &mut Tcod, game: &mut Game, objects: &mut Vec<Object>) {
+    let mut previous_player_position = (-1, -1);
+    while !tcod.root.window_closed() {
+        tcod.con.clear();
+        match input::check_for_event(input::MOUSE | input::KEY_PRESS) {
+            Some((_, Event::Mouse(m))) => tcod.mouse = m,
+            Some((_, Event::Key(k))) => tcod.key = k,
+            _ => tcod.key = Default::default(),
+        }
+        let fov_recompute = previous_player_position != (objects[PLAYER].pos());
+        render_all(tcod, game, &objects, fov_recompute);
+        tcod.root.flush();
+        previous_player_position = objects[PLAYER].pos();
+        let player_action = handle_keys(tcod, game, objects);
+        if player_action == PlayerAction::Exit {
+            save_game(game, objects).unwrap();
+            break;
+        }
+        if objects[PLAYER].alive && player_action != PlayerAction::DidntTakeTurn {
+           for id in 0..objects.len() {
+               if objects[id].ai.is_some() {
+                   ai_take_turn(id, tcod, game, objects);
+               }
+           }
+        }
+    }
+}
+
+fn main_menu(tcod: &mut Tcod) {
+    let img = tcod::image::Image::from_file("menu_background.png")
+        .ok()
+        .expect("Background Image not found");
+    while !tcod.root.window_closed() {
+        tcod::image::blit_2x(&img, (0, 0), (-1, -1), &mut tcod.root, (0, 0));
+        tcod.root.set_default_foreground(LIGHT_YELLOW);
+        tcod.root.print_ex(
+            SCREEN_WIDTH / 2,
+            SCREEN_HEIGHT / 2 - 4,
+            BackgroundFlag::None,
+            TextAlignment::Center,
+            "MAZE OF THE BLUE MEDUSA",
+            );
+        tcod.root.print_ex(
+            SCREEN_WIDTH / 2,
+            SCREEN_HEIGHT - 2,
+            BackgroundFlag::None,
+            TextAlignment::Center,
+            "Baptiste Zegre",
+            );
+
+        let choices = &["Play a new game", "Continue last game", "Quit"];
+        let choice = menu("", choices, 24, &mut tcod.root);
+        match choice {
+            Some(0) => {
+                let (mut game, mut objects) = new_game(tcod);
+                play_game(tcod, &mut game, &mut objects);
+            },
+            Some(1) => {
+                match load_game() {
+                    Ok((mut game, mut objects)) => {
+                        initialize_fov(tcod, &game.map);
+                        play_game(tcod, &mut game, &mut objects);
+                    }
+                    Err(_e) => {
+                        //msgbox("\nNo saved games to load.\n", 24, &mut tcod.root);
+                        println!("No saved games to load");
+                        continue;
+                    }
+                }
+            },
+            Some(2) => {
+                break;
+            }
+            _ => {}
+        }
+    }
+}
+
+
+fn save_game(game: &Game, objects: &[Object]) -> Result<(), Box<dyn Error>> {
+    let save_data = serde_json::to_string(&(game, objects))?;
+    let mut file = File::create("savegame")?;
+    file.write_all(save_data.as_bytes())?;
+    Ok(())
+}
+
+fn load_game() -> Result<(Game, Vec<Object>), Box<dyn Error>> {
+    let mut json_save_state = String::new();
+    let mut file = File::open("savegame")?;
+    file.read_to_string(&mut json_save_state)?;
+    let result = serde_json::from_str::<(Game, Vec<Object>)>(&json_save_state)?;
+    Ok(result)
+}
+
 // ===================== MAIN
 fn main() {
     tcod::system::set_fps(FPS_LIMIT);
@@ -705,7 +849,7 @@ fn main() {
         .font("arial10x10.png", FontLayout::Tcod)
         .font_type(FontType::Greyscale)
         .size(SCREEN_WIDTH, SCREEN_HEIGHT)
-        .title("LIBTCOD Tutorial")
+        .title("Maze Of The Blue Medusa")
         .init();
 
     let mut tcod = Tcod {
@@ -717,66 +861,5 @@ fn main() {
         mouse: Default::default(),
     };
 
-    // player_position 
-   
-    let mut player = Object::new(0, 0, '@', WHITE, "player", true);
-    player.alive = true;
-    player.fighter = Some(Fighter {
-        max_hp: 30,
-        hp: 30,
-        defense: 2,
-        power: 5,
-        on_death: DeathCallBack::Player,
-    });
-
-    let mut objects = vec![player];
-    let mut game = Game {
-        map: make_map(&mut objects),
-        messages: Messages::new(),
-        inventory: vec![],
-    };
-    
-    for y in 0..MAP_HEIGHT {
-        for x in 0..MAP_WIDTH {
-            tcod.fov.set(
-                x, 
-                y, 
-                !game.map[x as usize][y as usize].block_sight,
-                !game.map[x as usize][y as usize].blocked,
-                );
-        }
-    }
-    // force the FOV to be recompute
-    let mut previous_player_position = (-1, -1);
-
-    game.messages.add(
-        "Welcome stranger! prepare to perish in the tombs of the acient kings",
-        RED
-        );
-    
-    // game_loop 
-    while !tcod.root.window_closed() {
-        tcod.con.clear();
-        let fov_recompute = previous_player_position != (objects[PLAYER].x, objects[PLAYER].y);
-        match input::check_for_event(input::MOUSE | input::KEY_PRESS) {
-            Some((_, Event::Mouse(m))) => tcod.mouse = m,
-            Some((_, Event::Key(k))) => tcod.key = k,
-            _ => tcod.key = Default::default(),
-        }
-        render_all(&mut tcod, &mut game, &objects, fov_recompute);
-        tcod.root.flush();
-        previous_player_position = objects[PLAYER].pos();
-        let player_action = handle_keys(&mut tcod, &mut game, &mut objects);
-        if player_action == PlayerAction::Exit {
-            break;
-        }
-        if objects[PLAYER].alive && player_action != PlayerAction::DidntTakeTurn {
-           for id in 0..objects.len() {
-               if objects[id].ai.is_some() {
-                   ai_take_turn(id, &tcod, &mut game, &mut objects);
-               }
-           }
-        }
-    }
-
+    main_menu(&mut tcod);
 }
