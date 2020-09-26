@@ -202,6 +202,15 @@ fn handle_keys(tcod: &mut Tcod, game: &mut Game, objects: &mut Vec<Object>) -> P
             }
             DidntTakeTurn
         }
+        (Key { code: Text, ..}, "<", true) => {
+            let player_on_stairs = objects
+                .iter()
+                .any(|object| object.pos() == objects[PLAYER].pos() && object.name == "stairs");
+            if player_on_stairs {
+                next_level(tcod, game, objects);
+            }
+            DidntTakeTurn
+        }
         _ => DidntTakeTurn 
     }
 }
@@ -405,8 +414,30 @@ fn make_map(objects: &mut Vec<Object>) -> Map {
             rooms.push(new_room);
         }
     }
+    // Create Stairs
+    // Stairs are in the last room
+    let (last_room_x, last_room_y) = rooms[rooms.len() - 1].center();
+    let mut stairs = Object::new(last_room_x, last_room_y, '<', WHITE, "stairs", false);
+    stairs.always_visible = true;
+    objects.push(stairs);
 
     map
+}
+
+fn next_level(tcod: &mut Tcod, game: &mut Game, objects: &mut Vec<Object>) {
+    game.messages.add(
+        "You take a moment to rest, and recover your strength",
+        VIOLET,
+        );
+    let heal_hp = objects[PLAYER].fighter.map_or(0, |f| f.max_hp / 2);
+    objects[PLAYER].heal(heal_hp);
+    game.messages.add(
+        "After a rare moment of peace, you descend deeper into the hearth of the dungeon...",
+        RED,
+        );
+    game.dungeon_level += 1;
+    game.map = make_map(objects);
+    initialize_fov(tcod, &game.map);
 }
 
 fn render_bar(
